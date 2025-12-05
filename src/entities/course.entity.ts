@@ -13,4 +13,7 @@ export class Course {
 
   @Column()
   type: string; // LECTURE / LAB
+
+  @Column('int', { default: 1 })
+  sessionsPerWeek: number; // how many times per week this course meets
 }

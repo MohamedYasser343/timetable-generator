@@ -10,4 +10,10 @@ export class Room {
 
   @Column('int')
   capacity: number;
+
+  @Column({ nullable: true })
+  building: string; // e.g., "A", "B", "Main"
+
+  @Column('int', { nullable: true })
+  floor: number; // for distance calculations
 }

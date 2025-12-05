@@ -43,6 +43,7 @@ export class ImportService {
         name: c.CourseName,
         credits: Number(c.Credits || 0),
         type: (c.Type || 'LECTURE').toUpperCase(),
+        sessionsPerWeek: Number(c.SessionsPerWeek || 1),
       })),
     );
 
@@ -63,6 +64,8 @@ export class ImportService {
         name: r.RoomID,
         type: (r.Type || 'LECTURE').toUpperCase(),
         capacity: Number(r.Capacity || 0),
+        building: r.Building || null,
+        floor: r.Floor ? Number(r.Floor) : null,
       })),
     );
 
@@ -72,6 +75,7 @@ export class ImportService {
         day: t.Day,
         startTime: t.StartTime,
         endTime: t.EndTime,
+        priority: Number(t.Priority || 0),
       })),
     );
 

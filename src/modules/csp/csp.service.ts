@@ -6,6 +6,23 @@ import { Room } from '../../entities/room.entity';
 import { TimeSlot } from '../../entities/timeslot.entity';
 import { TimetableEntry } from '../../entities/timetable-entry.entity';
 
+interface CourseSession {
+  courseCode: string;
+  sessionNumber: number; // 1, 2, 3... for multi-session courses
+  course: Course;
+}
+
+interface Assignment {
+  courseCode: string;
+  sessionNumber: number;
+  instructorId: string;
+  roomName: string;
+  timeslotId: number;
+  instructor: Instructor;
+  room: Room;
+  timeslot: TimeSlot;
+}
+
 @Injectable()
 export class CspService {
   async loadAll() {
@@ -39,77 +56,221 @@ export class CspService {
     return set.includes(course.code.toUpperCase());
   }
 
-  // Main solver: courses are variables to assign
+  // Calculate distance penalty between two rooms
+  calculateRoomDistance(room1: Room, room2: Room): number {
+    // If no building/floor info, assume adjacent (small penalty)
+    if (!room1.building || !room2.building) return 1;
+
+    // Different buildings = large penalty
+    if (room1.building !== room2.building) return 10;
+
+    // Same building, different floors
+    if (room1.floor !== undefined && room2.floor !== undefined) {
+      return Math.abs(room1.floor - room2.floor);
+    }
+
+    return 1; // same building, unknown floors
+  }
+
+  // Get the day of week as a number for distribution calculation
+  getDayNumber(day: string): number {
+    const days = { 'sunday': 0, 'monday': 1, 'tuesday': 2, 'wednesday': 3,
+                   'thursday': 4, 'friday': 5, 'saturday': 6 };
+    return days[day.toLowerCase()] ?? 0;
+  }
+
+  // Check if room type is compatible with course type
+  roomTypeCompatible(courseType: string, roomType: string): boolean {
+    const ct = courseType.toUpperCase();
+    const rt = roomType.toUpperCase();
+
+    // Exact match
+    if (ct === rt) return true;
+
+    // "LECTURE AND LAB" can use either LECTURE or LAB rooms
+    if (ct.includes('LECTURE') && rt === 'LECTURE') return true;
+    if (ct.includes('LAB') && rt === 'LAB') return true;
+
+    return false;
+  }
+
+  // Main solver: each course session is a variable
   async solve() {
     const { courses, instructors, rooms, timeslots } = await this.loadAll();
 
-    // Build domains per course
-    const domains = new Map<string, any[]>();
+    // Create course sessions (each course with sessionsPerWeek creates multiple variables)
+    const courseSessions: CourseSession[] = [];
     for (const course of courses) {
+      const sessions = course.sessionsPerWeek || 1;
+      for (let i = 1; i <= sessions; i++) {
+        courseSessions.push({
+          courseCode: course.code,
+          sessionNumber: i,
+          course
+        });
+      }
+    }
+
+    // Build domains per course session
+    const domains = new Map<string, any[]>();
+    for (const session of courseSessions) {
+      const key = `${session.courseCode}_${session.sessionNumber}`;
       const domain = [];
+
       for (const ts of timeslots) {
         for (const room of rooms) {
-          // room type match
-          if (course.type && room.type && course.type.toUpperCase() !== room.type.toUpperCase()) continue;
+          // HARD: room type must be compatible with course type
+          if (session.course.type && room.type &&
+              !this.roomTypeCompatible(session.course.type, room.type)) continue;
+
           for (const inst of instructors) {
-            // respect preferredSlots as hard: skip if instructor forbids ts.day
+            // HARD: respect instructor day preferences
             if (!this.instructorAllowsTimeslot(inst, ts)) continue;
             domain.push({ timeslot: ts, room, instructor: inst });
           }
         }
       }
-      // if domain empty (e.g., all instructors said "Not on Sunday" but only Sunday slots exist)
-      // relax preferredSlots and allow any instructor that matches room type
+
+      // Fallback: if domain empty, relax instructor preferences
       if (domain.length === 0) {
         for (const ts of timeslots) {
           for (const room of rooms) {
-            if (course.type && room.type && course.type.toUpperCase() !== room.type.toUpperCase()) continue;
+            if (session.course.type && room.type &&
+                !this.roomTypeCompatible(session.course.type, room.type)) continue;
             for (const inst of instructors) {
               domain.push({ timeslot: ts, room, instructor: inst });
             }
           }
         }
       }
-      domains.set(course.code, domain);
+
+      domains.set(key, domain);
     }
 
-    // Order courses by smallest domain
+    // Order by smallest domain first (MRV heuristic)
     const order = [...domains.entries()].sort((a, b) => a[1].length - b[1].length);
 
-    const assignment: any[] = [];
+    const assignment: Assignment[] = [];
 
-    const violatesHard = (candidate) => {
-      // check against current assignment:
+    // HARD CONSTRAINT CHECKS
+    const violatesHard = (candidate: Assignment): boolean => {
       for (const a of assignment) {
-        // same instructor same timeslot?
-        if (a.instructorId === candidate.instructor.externalId && a.timeslotId === candidate.timeslot.id) return true;
-        // same room same timeslot?
-        if (a.roomName === candidate.room.name && a.timeslotId === candidate.timeslot.id) return true;
+        // No instructor teaches multiple classes at same time
+        if (a.instructorId === candidate.instructorId &&
+            a.timeslotId === candidate.timeslotId) return true;
+
+        // No room hosts multiple classes at same time
+        if (a.roomName === candidate.roomName &&
+            a.timeslotId === candidate.timeslotId) return true;
       }
       return false;
     };
 
-    const scoreCandidate = (course: Course, cand) => {
+    // SOFT CONSTRAINT SCORING (lower score = better)
+    const scoreCandidate = (session: CourseSession, cand: any, assignment: Assignment[]): number => {
       let score = 0;
-      if (this.instructorQualified(cand.instructor, course)) score -= 5; // prefer qualified
+
+      // SOFT: Prefer qualified instructors (strong preference)
+      if (this.instructorQualified(cand.instructor, session.course)) {
+        score -= 50;
+      }
+
+      // SOFT: Avoid early morning/late evening (use priority field)
+      score += (cand.timeslot.priority || 0) * 10;
+
+      // SOFT: Avoid consecutive distant rooms for same instructor
+      const instructorPrevAssignments = assignment
+        .filter(a => a.instructorId === cand.instructor.externalId)
+        .sort((a, b) => {
+          // Sort by day then time
+          if (a.timeslot.day !== b.timeslot.day) {
+            return this.getDayNumber(a.timeslot.day) - this.getDayNumber(b.timeslot.day);
+          }
+          return a.timeslot.startTime.localeCompare(b.timeslot.startTime);
+        });
+
+      // Check if this would be consecutive with any previous assignment
+      for (let i = 0; i < instructorPrevAssignments.length; i++) {
+        const prev = instructorPrevAssignments[i];
+        // If on same day and potentially consecutive slots
+        if (prev.timeslot.day === cand.timeslot.day) {
+          const distance = this.calculateRoomDistance(prev.room, cand.room);
+          score += distance * 5; // penalize distant rooms
+        }
+      }
+
+      // SOFT: Distribute classes evenly across the week
+      // Count how many classes already on this day for this course
+      const courseAssignmentsOnDay = assignment
+        .filter(a => a.courseCode === session.courseCode &&
+                     a.timeslot.day === cand.timeslot.day)
+        .length;
+      score += courseAssignmentsOnDay * 15; // penalize clustering on same day
+
+      // SOFT: Try to minimize gaps for students (approximate: prefer consecutive times)
+      const courseAssignments = assignment
+        .filter(a => a.courseCode === session.courseCode);
+
+      if (courseAssignments.length > 0) {
+        // Prefer times that are close to existing assignments
+        let minGap = Infinity;
+        for (const prev of courseAssignments) {
+          if (prev.timeslot.day === cand.timeslot.day) {
+            // On same day - calculate time gap
+            const gap = Math.abs(
+              this.timeToMinutes(cand.timeslot.startTime) -
+              this.timeToMinutes(prev.timeslot.endTime)
+            );
+            minGap = Math.min(minGap, gap);
+          }
+        }
+        // Small penalty for gaps > 1 hour
+        if (minGap !== Infinity && minGap > 60) {
+          score += Math.floor(minGap / 60) * 3;
+        }
+      }
+
       return score;
     };
 
-    const backtrack = (index) => {
+    // Helper to convert time string to minutes
+    const timeToMinutes = (timeStr: string): number => {
+      const match = timeStr.match(/(\d+):(\d+)\s*(AM|PM)/i);
+      if (!match) return 0;
+      let hours = parseInt(match[1]);
+      const minutes = parseInt(match[2]);
+      const ampm = match[3].toUpperCase();
+      if (ampm === 'PM' && hours !== 12) hours += 12;
+      if (ampm === 'AM' && hours === 12) hours = 0;
+      return hours * 60 + minutes;
+    };
+    this.timeToMinutes = timeToMinutes;
+
+    // Backtracking search
+    const backtrack = (index: number): boolean => {
       if (index >= order.length) return true;
-      const [courseCode, domain] = order[index];
-      // if domain empty => fail
+
+      const [key, domain] = order[index];
       if (!domain || domain.length === 0) return false;
 
-      // sort domain by soft score best first
+      // Parse key to get session info
+      const [courseCode, sessionNum] = key.split('_');
       const course = courses.find(c => c.code === courseCode);
+      const session: CourseSession = {
+        courseCode,
+        sessionNumber: parseInt(sessionNum),
+        course
+      };
+
+      // Sort domain by soft constraint score (best first)
       const sorted = domain
-        .map(d => ({ ...d, score: scoreCandidate(course, d) }))
+        .map(d => ({ ...d, score: scoreCandidate(session, d, assignment) }))
         .sort((a, b) => a.score - b.score);
 
       for (const d of sorted) {
-        const cand = {
+        const candidate: Assignment = {
           courseCode,
+          sessionNumber: session.sessionNumber,
           instructorId: d.instructor.externalId,
           roomName: d.room.name,
           timeslotId: d.timeslot.id,
@@ -117,23 +278,40 @@ export class CspService {
           room: d.room,
           timeslot: d.timeslot
         };
-        if (violatesHard(cand)) continue;
-        assignment.push(cand);
+
+        if (violatesHard(candidate)) continue;
+
+        assignment.push(candidate);
         if (backtrack(index + 1)) return true;
         assignment.pop();
       }
+
       return false;
     };
 
     const ok = backtrack(0);
-    if (!ok) throw new Error('No feasible assignment found for given data and constraints');
+    if (!ok) {
+      throw new Error('No feasible assignment found for given data and constraints');
+    }
 
-    // reduce to timetable entries
+    // Return timetable entries
     return assignment.map(a => ({
       courseCode: a.courseCode,
       instructorId: a.instructorId,
       roomName: a.roomName,
       timeslotId: a.timeslotId
     }));
+  }
+
+  // Helper method for time conversion (needs to be accessible in solve)
+  private timeToMinutes(timeStr: string): number {
+    const match = timeStr.match(/(\d+):(\d+)\s*(AM|PM)/i);
+    if (!match) return 0;
+    let hours = parseInt(match[1]);
+    const minutes = parseInt(match[2]);
+    const ampm = match[3].toUpperCase();
+    if (ampm === 'PM' && hours !== 12) hours += 12;
+    if (ampm === 'AM' && hours === 12) hours = 0;
+    return hours * 60 + minutes;
   }
 }

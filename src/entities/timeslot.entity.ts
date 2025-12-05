@@ -13,4 +13,7 @@ export class TimeSlot {
 
   @Column()
   endTime: string;
+
+  @Column('int', { default: 0 })
+  priority: number; // Lower is better: 0=normal, 1=early morning, 2=late evening
 }
