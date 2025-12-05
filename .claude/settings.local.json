@@ -8,7 +8,8 @@
       "Bash(sqlite3:*)",
       "Bash(ts-node:*)",
       "Bash(npx ts-node:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(mkdir:*)"
     ],
     "deny": [],
     "ask": []
