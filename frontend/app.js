@@ -1,36 +1,9 @@
 const API_URL = 'http://localhost:3000';
 
-// Timeslot mapping based on CSV data (1-indexed to match database IDs)
-const TIMESLOTS = [
-  { id: 1, day: 'Sunday', startTime: '9:00 AM', endTime: '10:30 AM' },
-  { id: 2, day: 'Sunday', startTime: '10:45 AM', endTime: '12:15 PM' },
-  { id: 3, day: 'Sunday', startTime: '12:30 PM', endTime: '2:00 PM' },
-  { id: 4, day: 'Sunday', startTime: '2:15 PM', endTime: '3:45 PM' },
-  { id: 5, day: 'Monday', startTime: '9:00 AM', endTime: '10:30 AM' },
-  { id: 6, day: 'Monday', startTime: '10:45 AM', endTime: '12:15 PM' },
-  { id: 7, day: 'Monday', startTime: '12:30 PM', endTime: '2:00 PM' },
-  { id: 8, day: 'Monday', startTime: '2:15 PM', endTime: '3:45 PM' },
-  { id: 9, day: 'Tuesday', startTime: '9:00 AM', endTime: '10:30 AM' },
-  { id: 10, day: 'Tuesday', startTime: '10:45 AM', endTime: '12:15 PM' },
-  { id: 11, day: 'Tuesday', startTime: '12:30 PM', endTime: '2:00 PM' },
-  { id: 12, day: 'Tuesday', startTime: '2:15 PM', endTime: '3:45 PM' },
-  { id: 13, day: 'Wednesday', startTime: '9:00 AM', endTime: '10:30 AM' },
-  { id: 14, day: 'Wednesday', startTime: '10:45 AM', endTime: '12:15 PM' },
-  { id: 15, day: 'Wednesday', startTime: '12:30 PM', endTime: '2:00 PM' },
-  { id: 16, day: 'Wednesday', startTime: '2:15 PM', endTime: '3:45 PM' },
-  { id: 17, day: 'Thursday', startTime: '9:00 AM', endTime: '10:30 AM' },
-  { id: 18, day: 'Thursday', startTime: '10:45 AM', endTime: '12:15 PM' },
-  { id: 19, day: 'Thursday', startTime: '12:30 PM', endTime: '2:00 PM' },
-  { id: 20, day: 'Thursday', startTime: '2:15 PM', endTime: '3:45 PM' },
-];
-
-const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday'];
-const TIME_SLOTS_PER_DAY = [
-  { startTime: '9:00 AM', endTime: '10:30 AM' },
-  { startTime: '10:45 AM', endTime: '12:15 PM' },
-  { startTime: '12:30 PM', endTime: '2:00 PM' },
-  { startTime: '2:15 PM', endTime: '3:45 PM' },
-];
+// These will be populated from the API
+let TIMESLOTS = [];
+let DAYS = [];
+let TIME_SLOTS_PER_DAY = [];
 
 // Color palette for courses
 const COLORS = [
@@ -41,24 +14,95 @@ const COLORS = [
 
 let timetableData = [];
 let courseColors = {};
+let currentTab = 'courses';
+let editingEntity = null;
 
 // DOM Elements
 const calendarBody = document.getElementById('calendarBody');
 const legendItems = document.getElementById('legendItems');
 const refreshBtn = document.getElementById('refreshBtn');
+const generateBtn = document.getElementById('generateBtn');
+const manageDataBtn = document.getElementById('manageDataBtn');
 const filterType = document.getElementById('filterType');
 const filterValue = document.getElementById('filterValue');
 const tooltip = document.getElementById('tooltip');
+const metricsPanel = document.getElementById('metricsPanel');
+const closeMetrics = document.getElementById('closeMetrics');
+const modalOverlay = document.getElementById('modalOverlay');
+const closeModal = document.getElementById('closeModal');
+const modalContent = document.getElementById('modalContent');
+const entityModalOverlay = document.getElementById('entityModalOverlay');
+const closeEntityModal = document.getElementById('closeEntityModal');
+const cancelEntity = document.getElementById('cancelEntity');
+const saveEntity = document.getElementById('saveEntity');
+const entityForm = document.getElementById('entityForm');
+const entityModalTitle = document.getElementById('entityModalTitle');
 
 // Initialize
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  // First fetch timeslots to build the calendar structure
+  await fetchTimeslots();
   buildCalendarStructure();
   fetchTimetable();
 
   refreshBtn.addEventListener('click', fetchTimetable);
+  generateBtn.addEventListener('click', generateTimetable);
+  manageDataBtn.addEventListener('click', openDataModal);
   filterType.addEventListener('change', handleFilterTypeChange);
   filterValue.addEventListener('change', applyFilter);
+  closeMetrics.addEventListener('click', () => metricsPanel.style.display = 'none');
+  closeModal.addEventListener('click', closeDataModal);
+  closeEntityModal.addEventListener('click', closeEntityModalFn);
+  cancelEntity.addEventListener('click', closeEntityModalFn);
+  saveEntity.addEventListener('click', handleSaveEntity);
+  modalOverlay.addEventListener('click', (e) => { if (e.target === modalOverlay) closeDataModal(); });
+  entityModalOverlay.addEventListener('click', (e) => { if (e.target === entityModalOverlay) closeEntityModalFn(); });
+
+  // Tab buttons
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+  });
 });
+
+async function fetchTimeslots() {
+  try {
+    const response = await fetch(`${API_URL}/timeslots`);
+    if (!response.ok) throw new Error('Failed to fetch timeslots');
+
+    TIMESLOTS = await response.json();
+
+    // Extract unique days in order
+    const dayOrder = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    DAYS = [...new Set(TIMESLOTS.map(ts => ts.day))].sort((a, b) => dayOrder.indexOf(a) - dayOrder.indexOf(b));
+
+    // Extract unique time slots (use first day's slots as template)
+    const firstDaySlots = TIMESLOTS.filter(ts => ts.day === DAYS[0]);
+    TIME_SLOTS_PER_DAY = firstDaySlots.map(ts => ({
+      startTime: ts.startTime,
+      endTime: ts.endTime
+    }));
+
+    // Update calendar header with dynamic days
+    updateCalendarHeader();
+  } catch (error) {
+    console.error('Error fetching timeslots:', error);
+    // Fallback to empty arrays - calendar will be empty
+  }
+}
+
+function updateCalendarHeader() {
+  // Set CSS variable for dynamic column count
+  document.documentElement.style.setProperty('--days-count', DAYS.length);
+
+  const headerContainer = document.querySelector('.calendar-header');
+  headerContainer.innerHTML = '<div class="time-column-header">Time</div>';
+  DAYS.forEach(day => {
+    const dayHeader = document.createElement('div');
+    dayHeader.className = 'day-header';
+    dayHeader.textContent = day;
+    headerContainer.appendChild(dayHeader);
+  });
+}
 
 function buildCalendarStructure() {
   calendarBody.innerHTML = '';
@@ -266,4 +310,317 @@ function renderLegend() {
     `;
     legendItems.appendChild(item);
   });
+}
+
+// ===== GENERATE TIMETABLE =====
+async function generateTimetable() {
+  try {
+    generateBtn.disabled = true;
+    generateBtn.innerHTML = '<span class="spinner"></span>Generating...';
+
+    const response = await fetch(`${API_URL}/timetable/generate`, { method: 'POST' });
+    if (!response.ok) throw new Error('Failed to generate timetable');
+
+    const result = await response.json();
+    if (!result.success) throw new Error(result.error || 'Generation failed');
+
+    timetableData = result.entries;
+    assignCourseColors();
+    buildCalendarStructure();
+    renderTimetable(timetableData);
+    updateFilters();
+    renderLegend();
+
+    // Show metrics panel
+    if (result.metrics) {
+      displayMetrics(result.metrics);
+      metricsPanel.style.display = 'block';
+    }
+  } catch (error) {
+    alert('Error: ' + error.message);
+    console.error('Error generating timetable:', error);
+  } finally {
+    generateBtn.disabled = false;
+    generateBtn.innerHTML = 'Generate Timetable';
+  }
+}
+
+function displayMetrics(metrics) {
+  document.getElementById('metricTotalTime').textContent = metrics.totalTimeMs + ' ms';
+  document.getElementById('metricDataLoad').textContent = metrics.dataLoadTimeMs + ' ms';
+  document.getElementById('metricDomainConstruction').textContent = metrics.domainConstructionTimeMs + ' ms';
+  document.getElementById('metricSearchTime').textContent = metrics.searchTimeMs + ' ms';
+
+  document.getElementById('metricSections').textContent = metrics.problemSize.totalSections;
+  document.getElementById('metricSessions').textContent = metrics.problemSize.totalSectionSessions;
+  document.getElementById('metricTimeslots').textContent = metrics.problemSize.totalTimeslots;
+  document.getElementById('metricRooms').textContent = metrics.problemSize.totalRooms;
+  document.getElementById('metricInstructors').textContent = metrics.problemSize.totalInstructors;
+  document.getElementById('metricAvgDomain').textContent = metrics.problemSize.averageDomainSize;
+
+  document.getElementById('metricTotalScore').textContent = metrics.totalSoftScore;
+  document.getElementById('metricAssignments').textContent = metrics.assignmentCount;
+  document.getElementById('metricBacktracks').textContent = metrics.backtrackCount;
+  document.getElementById('metricFallbacks').textContent = metrics.fallbackRelaxations;
+
+  document.getElementById('metricQualified').textContent = metrics.constraintBreakdown.qualifiedInstructorBonus;
+  document.getElementById('metricPreferred').textContent = metrics.constraintBreakdown.preferredInstructorBonus;
+  document.getElementById('metricEarlyLate').textContent = metrics.constraintBreakdown.earlyLateSlotPenalties;
+  document.getElementById('metricDistant').textContent = metrics.constraintBreakdown.distantRoomPenalties;
+  document.getElementById('metricClustering').textContent = metrics.constraintBreakdown.clusteringPenalties;
+  document.getElementById('metricGaps').textContent = metrics.constraintBreakdown.gapPenalties;
+}
+
+// ===== DATA MANAGEMENT MODAL =====
+function openDataModal() {
+  modalOverlay.classList.add('visible');
+  loadTabData('courses');
+}
+
+function closeDataModal() {
+  modalOverlay.classList.remove('visible');
+}
+
+function switchTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tab === tab);
+  });
+  loadTabData(tab);
+}
+
+async function loadTabData(tab) {
+  modalContent.innerHTML = '<div class="loading">Loading...</div>';
+  try {
+    const response = await fetch(`${API_URL}/${tab}`);
+    if (!response.ok) throw new Error('Failed to load data');
+    const data = await response.json();
+    renderDataTable(tab, data);
+  } catch (error) {
+    modalContent.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+  }
+}
+
+function renderDataTable(tab, data) {
+  const config = getTableConfig(tab);
+  let html = `
+    <button class="add-btn" onclick="openEntityModal('${tab}', null)">+ Add ${config.singular}</button>
+    <div class="data-table-container">
+      <table class="data-table">
+        <thead>
+          <tr>
+            ${config.columns.map(col => `<th>${col.label}</th>`).join('')}
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+  `;
+
+  data.forEach(item => {
+    html += '<tr>';
+    config.columns.forEach(col => {
+      html += `<td>${item[col.key] ?? '-'}</td>`;
+    });
+    html += `
+      <td class="actions">
+        <button class="btn-edit" onclick="openEntityModal('${tab}', ${JSON.stringify(item).replace(/"/g, '&quot;')})">Edit</button>
+        <button class="btn-delete" onclick="deleteEntity('${tab}', '${item[config.idKey]}')">Delete</button>
+      </td>
+    </tr>`;
+  });
+
+  html += '</tbody></table></div>';
+  modalContent.innerHTML = html;
+}
+
+function getTableConfig(tab) {
+  const configs = {
+    courses: {
+      singular: 'Course',
+      idKey: 'code',
+      columns: [
+        { key: 'code', label: 'Code' },
+        { key: 'name', label: 'Name' },
+        { key: 'credits', label: 'Credits' },
+        { key: 'type', label: 'Type' },
+        { key: 'sessionsPerWeek', label: 'Sessions/Week' }
+      ],
+      fields: [
+        { key: 'code', label: 'Course Code', type: 'text', required: true },
+        { key: 'name', label: 'Course Name', type: 'text', required: true },
+        { key: 'credits', label: 'Credits', type: 'number', required: true },
+        { key: 'type', label: 'Type', type: 'select', options: ['LECTURE', 'LAB', 'LECTURE AND LAB'], required: true },
+        { key: 'sessionsPerWeek', label: 'Sessions Per Week', type: 'number', required: true }
+      ]
+    },
+    instructors: {
+      singular: 'Instructor',
+      idKey: 'externalId',
+      columns: [
+        { key: 'externalId', label: 'ID' },
+        { key: 'name', label: 'Name' },
+        { key: 'role', label: 'Role' },
+        { key: 'preferredSlots', label: 'Preferences' },
+        { key: 'qualifiedCourses', label: 'Qualified Courses' }
+      ],
+      fields: [
+        { key: 'externalId', label: 'Instructor ID', type: 'text', required: true },
+        { key: 'name', label: 'Name', type: 'text', required: true },
+        { key: 'role', label: 'Role', type: 'text' },
+        { key: 'preferredSlots', label: 'Preferences (e.g., "Not on Sunday")', type: 'text' },
+        { key: 'qualifiedCourses', label: 'Qualified Courses (comma-separated)', type: 'text' }
+      ]
+    },
+    rooms: {
+      singular: 'Room',
+      idKey: 'name',
+      columns: [
+        { key: 'name', label: 'Name' },
+        { key: 'type', label: 'Type' },
+        { key: 'capacity', label: 'Capacity' },
+        { key: 'building', label: 'Building' },
+        { key: 'floor', label: 'Floor' }
+      ],
+      fields: [
+        { key: 'name', label: 'Room Name', type: 'text', required: true },
+        { key: 'type', label: 'Type', type: 'select', options: ['LECTURE', 'LAB'], required: true },
+        { key: 'capacity', label: 'Capacity', type: 'number', required: true },
+        { key: 'building', label: 'Building', type: 'text' },
+        { key: 'floor', label: 'Floor', type: 'number' }
+      ]
+    },
+    timeslots: {
+      singular: 'Time Slot',
+      idKey: 'id',
+      columns: [
+        { key: 'id', label: 'ID' },
+        { key: 'day', label: 'Day' },
+        { key: 'startTime', label: 'Start Time' },
+        { key: 'endTime', label: 'End Time' },
+        { key: 'priority', label: 'Priority' }
+      ],
+      fields: [
+        { key: 'day', label: 'Day', type: 'select', options: ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'], required: true },
+        { key: 'startTime', label: 'Start Time (e.g., "9:00 AM")', type: 'text', required: true },
+        { key: 'endTime', label: 'End Time (e.g., "10:30 AM")', type: 'text', required: true },
+        { key: 'priority', label: 'Priority (0=normal, 1=early, 2=late)', type: 'number', required: true }
+      ]
+    },
+    sections: {
+      singular: 'Section',
+      idKey: 'id',
+      columns: [
+        { key: 'id', label: 'Section ID' },
+        { key: 'courseCode', label: 'Course Code' },
+        { key: 'sectionName', label: 'Section Name' },
+        { key: 'capacity', label: 'Capacity' },
+        { key: 'preferredInstructor', label: 'Preferred Instructor' }
+      ],
+      fields: [
+        { key: 'id', label: 'Section ID (e.g., "CSC111-A")', type: 'text', required: true },
+        { key: 'courseCode', label: 'Course Code', type: 'text', required: true },
+        { key: 'sectionName', label: 'Section Name (e.g., "A")', type: 'text', required: true },
+        { key: 'capacity', label: 'Capacity', type: 'number', required: true },
+        { key: 'preferredInstructor', label: 'Preferred Instructor ID', type: 'text' }
+      ]
+    }
+  };
+  return configs[tab];
+}
+
+// ===== ENTITY MODAL =====
+function openEntityModal(tab, entity) {
+  editingEntity = { tab, entity, isNew: !entity };
+  const config = getTableConfig(tab);
+  entityModalTitle.textContent = entity ? `Edit ${config.singular}` : `Add ${config.singular}`;
+
+  let html = '';
+  config.fields.forEach(field => {
+    const value = entity ? (entity[field.key] ?? '') : '';
+    const disabled = entity && field.key === config.idKey ? 'disabled' : '';
+
+    if (field.type === 'select') {
+      html += `
+        <div class="form-group">
+          <label>${field.label}${field.required ? ' *' : ''}</label>
+          <select name="${field.key}" ${field.required ? 'required' : ''} ${disabled}>
+            <option value="">Select...</option>
+            ${field.options.map(opt => `<option value="${opt}" ${value === opt ? 'selected' : ''}>${opt}</option>`).join('')}
+          </select>
+        </div>
+      `;
+    } else {
+      html += `
+        <div class="form-group">
+          <label>${field.label}${field.required ? ' *' : ''}</label>
+          <input type="${field.type}" name="${field.key}" value="${value}" ${field.required ? 'required' : ''} ${disabled}>
+        </div>
+      `;
+    }
+  });
+
+  entityForm.innerHTML = html;
+  entityModalOverlay.classList.add('visible');
+}
+
+function closeEntityModalFn() {
+  entityModalOverlay.classList.remove('visible');
+  editingEntity = null;
+}
+
+async function handleSaveEntity() {
+  if (!editingEntity) return;
+
+  const formData = new FormData(entityForm);
+  const data = {};
+  for (const [key, value] of formData.entries()) {
+    data[key] = value;
+  }
+
+  // Convert number fields
+  const config = getTableConfig(editingEntity.tab);
+  config.fields.forEach(field => {
+    if (field.type === 'number' && data[field.key]) {
+      data[field.key] = parseInt(data[field.key], 10);
+    }
+  });
+
+  try {
+    saveEntity.disabled = true;
+    saveEntity.innerHTML = '<span class="spinner"></span>Saving...';
+
+    const url = editingEntity.isNew
+      ? `${API_URL}/${editingEntity.tab}`
+      : `${API_URL}/${editingEntity.tab}/${editingEntity.entity[config.idKey]}`;
+
+    const method = editingEntity.isNew ? 'POST' : 'PUT';
+
+    const response = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+
+    if (!response.ok) throw new Error('Failed to save');
+
+    closeEntityModalFn();
+    loadTabData(editingEntity.tab);
+  } catch (error) {
+    alert('Error: ' + error.message);
+  } finally {
+    saveEntity.disabled = false;
+    saveEntity.innerHTML = 'Save';
+  }
+}
+
+async function deleteEntity(tab, id) {
+  if (!confirm('Are you sure you want to delete this item?')) return;
+
+  try {
+    const response = await fetch(`${API_URL}/${tab}/${id}`, { method: 'DELETE' });
+    if (!response.ok) throw new Error('Failed to delete');
+    loadTabData(tab);
+  } catch (error) {
+    alert('Error: ' + error.message);
+  }
 }

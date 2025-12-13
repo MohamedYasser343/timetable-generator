@@ -8,8 +8,13 @@ export class TimetableController {
   @Post('generate')
   async generate() {
     try {
-      const entries = await this.svc.generateAndSave();
-      return { success: true, count: entries.length, entries };
+      const result = await this.svc.generateAndSave();
+      return {
+        success: true,
+        count: result.entries.length,
+        entries: result.entries,
+        metrics: result.metrics
+      };
     } catch (e) {
       return { success: false, error: e.message };
     }

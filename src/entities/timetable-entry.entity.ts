@@ -6,6 +6,9 @@ export class TimetableEntry {
   id: number;
 
   @Column()
+  sectionId: string; // e.g., "CSC111-A"
+
+  @Column()
   courseCode: string;
 
   @Column()

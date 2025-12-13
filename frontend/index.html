@@ -11,7 +11,9 @@
     <header>
       <h1>Timetable Calendar</h1>
       <div class="controls">
-        <button id="refreshBtn">Refresh Timetable</button>
+        <button id="generateBtn">Generate Timetable</button>
+        <button id="refreshBtn" class="secondary">Refresh</button>
+        <button id="manageDataBtn" class="secondary">Manage Data</button>
         <select id="filterType">
           <option value="all">All</option>
           <option value="instructor">By Instructor</option>
@@ -24,14 +26,120 @@
       </div>
     </header>
 
+    <!-- Metrics Panel -->
+    <div class="metrics-panel" id="metricsPanel" style="display: none;">
+      <div class="metrics-header">
+        <h3>Generation Metrics</h3>
+        <button class="close-btn" id="closeMetrics">&times;</button>
+      </div>
+      <div class="metrics-content">
+        <div class="metrics-section">
+          <h4>Timing</h4>
+          <div class="metrics-grid">
+            <div class="metric-item">
+              <span class="metric-label">Total Time</span>
+              <span class="metric-value" id="metricTotalTime">-</span>
+            </div>
+            <div class="metric-item">
+              <span class="metric-label">Data Load</span>
+              <span class="metric-value" id="metricDataLoad">-</span>
+            </div>
+            <div class="metric-item">
+              <span class="metric-label">Domain Construction</span>
+              <span class="metric-value" id="metricDomainConstruction">-</span>
+            </div>
+            <div class="metric-item">
+              <span class="metric-label">Search Time</span>
+              <span class="metric-value" id="metricSearchTime">-</span>
+            </div>
+          </div>
+        </div>
+        <div class="metrics-section">
+          <h4>Problem Size</h4>
+          <div class="metrics-grid">
+            <div class="metric-item">
+              <span class="metric-label">Sections</span>
+              <span class="metric-value" id="metricSections">-</span>
+            </div>
+            <div class="metric-item">
+              <span class="metric-label">Section Sessions</span>
+              <span class="metric-value" id="metricSessions">-</span>
+            </div>
+            <div class="metric-item">
+              <span class="metric-label">Timeslots</span>
+              <span class="metric-value" id="metricTimeslots">-</span>
+            </div>
+            <div class="metric-item">
+              <span class="metric-label">Rooms</span>
+              <span class="metric-value" id="metricRooms">-</span>
+            </div>
+            <div class="metric-item">
+              <span class="metric-label">Instructors</span>
+              <span class="metric-value" id="metricInstructors">-</span>
+            </div>
+            <div class="metric-item">
+              <span class="metric-label">Avg Domain Size</span>
+              <span class="metric-value" id="metricAvgDomain">-</span>
+            </div>
+          </div>
+        </div>
+        <div class="metrics-section">
+          <h4>Solution Quality</h4>
+          <div class="metrics-grid">
+            <div class="metric-item">
+              <span class="metric-label">Total Score</span>
+              <span class="metric-value" id="metricTotalScore">-</span>
+            </div>
+            <div class="metric-item">
+              <span class="metric-label">Assignments</span>
+              <span class="metric-value" id="metricAssignments">-</span>
+            </div>
+            <div class="metric-item">
+              <span class="metric-label">Backtracks</span>
+              <span class="metric-value" id="metricBacktracks">-</span>
+            </div>
+            <div class="metric-item">
+              <span class="metric-label">Fallback Relaxations</span>
+              <span class="metric-value" id="metricFallbacks">-</span>
+            </div>
+          </div>
+        </div>
+        <div class="metrics-section">
+          <h4>Constraint Breakdown</h4>
+          <div class="metrics-grid">
+            <div class="metric-item good">
+              <span class="metric-label">Qualified Instructors</span>
+              <span class="metric-value" id="metricQualified">-</span>
+            </div>
+            <div class="metric-item good">
+              <span class="metric-label">Preferred Instructors</span>
+              <span class="metric-value" id="metricPreferred">-</span>
+            </div>
+            <div class="metric-item warning">
+              <span class="metric-label">Early/Late Slots</span>
+              <span class="metric-value" id="metricEarlyLate">-</span>
+            </div>
+            <div class="metric-item warning">
+              <span class="metric-label">Distant Room Penalties</span>
+              <span class="metric-value" id="metricDistant">-</span>
+            </div>
+            <div class="metric-item warning">
+              <span class="metric-label">Clustering Penalties</span>
+              <span class="metric-value" id="metricClustering">-</span>
+            </div>
+            <div class="metric-item warning">
+              <span class="metric-label">Gap Penalties</span>
+              <span class="metric-value" id="metricGaps">-</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="calendar">
       <div class="calendar-header">
         <div class="time-column-header">Time</div>
-        <div class="day-header">Sunday</div>
-        <div class="day-header">Monday</div>
-        <div class="day-header">Tuesday</div>
-        <div class="day-header">Wednesday</div>
-        <div class="day-header">Thursday</div>
+        <!-- Day headers will be populated by JavaScript -->
       </div>
       <div class="calendar-body" id="calendarBody">
         <!-- Time slots will be populated by JavaScript -->
@@ -47,6 +155,45 @@
   </div>
 
   <div id="tooltip" class="tooltip"></div>
+
+  <!-- Data Management Modal -->
+  <div class="modal-overlay" id="modalOverlay">
+    <div class="modal" id="dataModal">
+      <div class="modal-header">
+        <h2 id="modalTitle">Manage Data</h2>
+        <button class="close-btn" id="closeModal">&times;</button>
+      </div>
+      <div class="modal-tabs">
+        <button class="tab-btn active" data-tab="courses">Courses</button>
+        <button class="tab-btn" data-tab="instructors">Instructors</button>
+        <button class="tab-btn" data-tab="rooms">Rooms</button>
+        <button class="tab-btn" data-tab="timeslots">Time Slots</button>
+        <button class="tab-btn" data-tab="sections">Sections</button>
+      </div>
+      <div class="modal-content" id="modalContent">
+        <!-- Content loaded dynamically -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit/Create Entity Modal -->
+  <div class="modal-overlay" id="entityModalOverlay">
+    <div class="modal entity-modal" id="entityModal">
+      <div class="modal-header">
+        <h2 id="entityModalTitle">Edit</h2>
+        <button class="close-btn" id="closeEntityModal">&times;</button>
+      </div>
+      <div class="modal-content">
+        <form id="entityForm">
+          <!-- Form fields loaded dynamically -->
+        </form>
+        <div class="modal-actions">
+          <button type="button" class="secondary" id="cancelEntity">Cancel</button>
+          <button type="button" id="saveEntity">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <script src="app.js"></script>
 </body>
